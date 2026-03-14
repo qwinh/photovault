@@ -25,6 +25,21 @@ class _ImagesViewState extends State<ImagesView> {
   bool _selectionMode = false;
   late final AppLifecycleListener _lifecycleListener;
 
+  // ── Drag-to-select state ──────────────────────────────────────────────────
+  // The key is placed on the GridView so we can get its RenderBox for
+  // coordinate mapping.
+  final _gridKey = GlobalKey();
+
+  // The scroll controller lets us read the current scroll offset during a drag.
+  final _scrollController = ScrollController();
+
+  // Tracks which items were already toggled in the current drag gesture so
+  // we don't flip the same item multiple times while the finger is on it.
+  final Set<int> _dragVisited = {};
+
+  // Whether the drag started on a selected item (drives select vs deselect mode).
+  bool? _dragSelecting;
+
   @override
   void initState() {
     super.initState();
@@ -32,11 +47,7 @@ class _ImagesViewState extends State<ImagesView> {
       context.read<ip.DeviceImageProvider>().requestPermissionAndLoad();
       context.read<SelectionProvider>().load();
     });
-    // Listen for app resume so we can re-check permission after returning
-    // from the OS Settings page.
-    _lifecycleListener = AppLifecycleListener(
-      onResume: _onAppResumed,
-    );
+    _lifecycleListener = AppLifecycleListener(onResume: _onAppResumed);
   }
 
   void _onAppResumed() {
@@ -51,15 +62,82 @@ class _ImagesViewState extends State<ImagesView> {
   @override
   void dispose() {
     _lifecycleListener.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
-  void _enterSelectionMode() {
-    setState(() => _selectionMode = true);
+  void _enterSelectionMode() => setState(() => _selectionMode = true);
+  void _exitSelectionMode()  => setState(() => _selectionMode = false);
+
+  // ── Drag-to-select helpers ────────────────────────────────────────────────
+
+  /// Converts a pointer position (in the GridView's local coordinate space)
+  /// into a grid item index, or -1 if out of bounds.
+  int _indexAt(Offset localPos, int itemCount, double gridWidth) {
+    final cols = (gridWidth / 120).floor().clamp(3, 6);
+    const spacing = 2.0;
+    const padding = 2.0;
+    final cellSize = (gridWidth - padding * 2 - spacing * (cols - 1)) / cols;
+
+    // Account for scroll offset so positions stay correct while scrolling.
+    final scrollOffset = _scrollController.hasClients
+        ? _scrollController.offset
+        : 0.0;
+    final adjustedY = localPos.dy + scrollOffset - padding;
+    final adjustedX = localPos.dx - padding;
+
+    if (adjustedX < 0 || adjustedY < 0) return -1;
+
+    final col = (adjustedX / (cellSize + spacing)).floor();
+    final row = (adjustedY / (cellSize + spacing)).floor();
+    if (col >= cols) return -1;
+
+    final idx = row * cols + col;
+    return (idx >= 0 && idx < itemCount) ? idx : -1;
   }
 
-  void _exitSelectionMode() {
-    setState(() => _selectionMode = false);
+  void _onDragStart(DragStartDetails details, int itemCount, double gridWidth) {
+    if (!_selectionMode) return;
+    final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final local = box.globalToLocal(details.globalPosition);
+    final idx   = _indexAt(local, itemCount, gridWidth);
+    if (idx == -1) return;
+
+    final selProv = context.read<SelectionProvider>();
+    final assets  = context.read<ip.DeviceImageProvider>().filtered;
+    _dragVisited.clear();
+    _dragVisited.add(idx);
+    // If the touched item is already selected, this drag will deselect.
+    _dragSelecting = !selProv.isSelected(assets[idx].id);
+    if (_dragSelecting!) {
+      selProv.select(assets[idx].id);
+    } else {
+      selProv.deselect(assets[idx].id);
+    }
+  }
+
+  void _onDragUpdate(DragUpdateDetails details, int itemCount, double gridWidth) {
+    if (!_selectionMode || _dragSelecting == null) return;
+    final box = _gridKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final local = box.globalToLocal(details.globalPosition);
+    final idx   = _indexAt(local, itemCount, gridWidth);
+    if (idx == -1 || _dragVisited.contains(idx)) return;
+
+    _dragVisited.add(idx);
+    final assets  = context.read<ip.DeviceImageProvider>().filtered;
+    final selProv = context.read<SelectionProvider>();
+    if (_dragSelecting!) {
+      selProv.select(assets[idx].id);
+    } else {
+      selProv.deselect(assets[idx].id);
+    }
+  }
+
+  void _onDragEnd(DragEndDetails _) {
+    _dragVisited.clear();
+    _dragSelecting = null;
   }
 
   @override
@@ -98,34 +176,58 @@ class _ImagesViewState extends State<ImagesView> {
                   onRequest: imgProv.requestPermissionAndLoad)
               : imgProv.filtered.isEmpty
                   ? const Center(child: Text('No photos found.'))
-                  : GridView.builder(
-                      padding: const EdgeInsets.all(2),
-                      gridDelegate:
-                          _adaptiveGrid(MediaQuery.of(context).size.width),
-                      itemCount: imgProv.filtered.length,
-                      itemBuilder: (ctx, i) {
-                        final asset = imgProv.filtered[i];
-                        final isSelected = selProv.isSelected(asset.id);
-
+                  : LayoutBuilder(
+                      builder: (ctx, constraints) {
+                        final gridWidth = constraints.maxWidth;
+                        final itemCount  = imgProv.filtered.length;
                         return GestureDetector(
-                          onTap: () {
-                            if (_selectionMode) {
-                              selProv.toggle(asset.id);
-                            } else {
-                              // Pass filtered list via provider for swipe nav
-                              context
-                                  .read<FilteredListNotifier>()
-                                  .setList(imgProv.filtered);
-                              context.push('/images/view/$i');
-                            }
-                          },
-                          onLongPress: () {
-                            _enterSelectionMode();
-                            selProv.toggle(asset.id);
-                          },
-                          child: AssetThumb(
-                            asset: asset,
-                            selected: isSelected,
+                          // In selection mode, a pan drag selects/deselects
+                          // every cell the finger passes over.
+                          onPanStart: _selectionMode
+                              ? (d) => _onDragStart(d, itemCount, gridWidth)
+                              : null,
+                          onPanUpdate: _selectionMode
+                              ? (d) => _onDragUpdate(d, itemCount, gridWidth)
+                              : null,
+                          onPanEnd: _selectionMode ? _onDragEnd : null,
+                          child: GridView.builder(
+                            key: _gridKey,
+                            controller: _scrollController,
+                            // Disable built-in scroll physics during a drag-select
+                            // so the pan gesture wins the arena without fighting
+                            // the scroll view.
+                            physics: _selectionMode
+                                ? const NeverScrollableScrollPhysics()
+                                : const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.all(2),
+                            gridDelegate:
+                                _adaptiveGrid(gridWidth),
+                            itemCount: itemCount,
+                            itemBuilder: (ctx, i) {
+                              final asset = imgProv.filtered[i];
+                              final isSelected = selProv.isSelected(asset.id);
+
+                              return GestureDetector(
+                                onTap: () {
+                                  if (_selectionMode) {
+                                    selProv.toggle(asset.id);
+                                  } else {
+                                    context
+                                        .read<FilteredListNotifier>()
+                                        .setList(imgProv.filtered);
+                                    context.push('/images/view/$i');
+                                  }
+                                },
+                                onLongPress: () {
+                                  _enterSelectionMode();
+                                  selProv.select(asset.id);
+                                },
+                                child: AssetThumb(
+                                  asset: asset,
+                                  selected: isSelected,
+                                ),
+                              );
+                            },
                           ),
                         );
                       },

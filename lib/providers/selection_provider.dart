@@ -40,6 +40,25 @@ class SelectionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Selects [assetId] if not already selected.
+  /// Skips entity resolution for speed — used by drag-to-select where
+  /// resolution on every frame would cause jank.
+  Future<void> select(String assetId) async {
+    if (_assetIds.contains(assetId)) return;
+    await _db.addToSelected(assetId);
+    _assetIds = List.from(_assetIds)..add(assetId);
+    notifyListeners();
+  }
+
+  /// Deselects [assetId] if currently selected.
+  /// Same performance trade-off as [select].
+  Future<void> deselect(String assetId) async {
+    if (!_assetIds.contains(assetId)) return;
+    await _db.removeFromSelected(assetId);
+    _assetIds = List.from(_assetIds)..remove(assetId);
+    notifyListeners();
+  }
+
   Future<void> removeOne(String assetId) async {
     await _db.removeFromSelected(assetId);
     _assetIds = List.from(_assetIds)..remove(assetId);
