@@ -1,0 +1,37 @@
+name: photovault
+description: A Flutter photo album manager app.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Navigation
+  go_router: ^14.8.1
+
+  # State management
+  provider: ^6.1.2
+
+  # Device images
+  photo_manager: ^3.5.1
+  photo_manager_image_provider: ^2.1.1
+
+  # Local database
+  sqflite: ^2.3.3+1
+  path: ^1.9.0
+  path_provider: ^2.1.4
+
+  # Local notifications
+  flutter_local_notifications: ^19.3.0
+
+  # Date formatting
+  intl: ^0.19.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
