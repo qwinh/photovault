@@ -196,6 +196,10 @@ class _AlbumsViewState extends State<AlbumsView> {
                                 context.push('/albums/${album.id}');
                               }
                             },
+                            onDoubleTap: () => context
+                                .read<AlbumProvider>()
+                                .updateAlbum(
+                                    album.copyWith(isFavorite: !album.isFavorite)),
                             onLongPress: () =>
                                 _enterSelectionMode(album.id!),
                             onEdit: () => context.push(
@@ -230,6 +234,7 @@ class _AlbumTile extends StatelessWidget {
   final bool selectionMode;
   final bool isSelected;
   final VoidCallback onTap;
+  final VoidCallback onDoubleTap;
   final VoidCallback onLongPress;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -239,6 +244,7 @@ class _AlbumTile extends StatelessWidget {
     required this.selectionMode,
     required this.isSelected,
     required this.onTap,
+    required this.onDoubleTap,
     required this.onLongPress,
     required this.onEdit,
     required this.onDelete,
@@ -275,27 +281,30 @@ class _AlbumTile extends StatelessWidget {
         }
       },
       onDismissed: (_) => onDelete(),
-      child: ListTile(
-        selected: isSelected,
-        leading: _AlbumThumb(albumId: album.id!, provider: ap),
-        title: Text(album.name),
-        subtitle: album.description.isNotEmpty
-            ? Text(album.description,
-                maxLines: 1, overflow: TextOverflow.ellipsis)
-            : null,
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (album.isFavorite)
-              const Icon(Icons.favorite, color: Colors.pink, size: 18),
-            if (selectionMode)
-              Icon(isSelected
-                  ? Icons.check_circle
-                  : Icons.radio_button_unchecked),
-          ],
+      child: GestureDetector(
+        onDoubleTap: onDoubleTap,
+        child: ListTile(
+          selected: isSelected,
+          leading: _AlbumThumb(albumId: album.id!, provider: ap),
+          title: Text(album.name),
+          subtitle: album.description.isNotEmpty
+              ? Text(album.description,
+                  maxLines: 1, overflow: TextOverflow.ellipsis)
+              : null,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (album.isFavorite)
+                const Icon(Icons.favorite, color: Colors.pink, size: 18),
+              if (selectionMode)
+                Icon(isSelected
+                    ? Icons.check_circle
+                    : Icons.radio_button_unchecked),
+            ],
+          ),
+          onTap: onTap,
+          onLongPress: onLongPress,
         ),
-        onTap: onTap,
-        onLongPress: onLongPress,
       ),
     );
   }
