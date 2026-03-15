@@ -35,12 +35,24 @@ class _ImageViewState extends State<ImageView> {
     _pageCtrl = PageController(initialPage: widget.initialIndex);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Get the list from the shared notifier (set by ImagesView or AlbumView)
       final list = context.read<FilteredListNotifier>().list;
       if (list.isNotEmpty && list.first is AssetEntity) {
         setState(() => _assets = list.cast<AssetEntity>());
+        _precacheNeighbours(widget.initialIndex);
       }
     });
+  }
+
+  /// Warms the image cache for the pages immediately before and after [index].
+  void _precacheNeighbours(int index) {
+    for (final offset in const [-1, 1]) {
+      final i = index + offset;
+      if (i < 0 || i >= _assets.length) continue;
+      precacheImage(
+        AssetEntityImageProvider(_assets[i], isOriginal: true),
+        context,
+      );
+    }
   }
 
   @override
@@ -96,8 +108,10 @@ class _ImageViewState extends State<ImageView> {
                 PageView.builder(
                   controller: _pageCtrl,
                   itemCount: _assets.length,
-                  onPageChanged: (i) =>
-                      setState(() => _currentIndex = i),
+                  onPageChanged: (i) {
+                    setState(() => _currentIndex = i);
+                    _precacheNeighbours(i);
+                  },
                   itemBuilder: (ctx, i) {
                     return InteractiveViewer(
                       child: Center(
