@@ -10,7 +10,7 @@ import '../models/models.dart';
 
 class DatabaseHelper {
   static const _dbName = 'photovault.db';
-  static const _dbVersion = 1;
+  static const _dbVersion = 2;
 
   DatabaseHelper._();
   static final DatabaseHelper instance = DatabaseHelper._();
@@ -28,6 +28,7 @@ class DatabaseHelper {
       join(dbPath, _dbName),
       version: _dbVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
   }
 
@@ -44,7 +45,7 @@ class DatabaseHelper {
     await db.execute('''
       CREATE TABLE tags (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        name        TEXT    NOT NULL,
+        name        TEXT    NOT NULL UNIQUE,
         description TEXT    NOT NULL DEFAULT ''
       )
     ''');
@@ -75,6 +76,20 @@ class DatabaseHelper {
         sort_idx INTEGER NOT NULL DEFAULT 0
       )
     ''');
+  }
+
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      // Add UNIQUE constraint to tags.name via a table rebuild (SQLite does
+      // not support ADD CONSTRAINT on existing tables).
+      await db.execute(
+          'CREATE TABLE tags_new (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT \'\')');
+      // Copy rows; on conflict keep the first occurrence (lowest id).
+      await db.execute(
+          'INSERT OR IGNORE INTO tags_new (id, name, description) SELECT id, name, description FROM tags ORDER BY id ASC');
+      await db.execute('DROP TABLE tags');
+      await db.execute('ALTER TABLE tags_new RENAME TO tags');
+    }
   }
 
   // ── Albums ──────────────────────────────────────────────────────────────────
@@ -108,6 +123,22 @@ class DatabaseHelper {
     final db = await database;
     final rows = await db.query('tags', orderBy: 'name ASC');
     return rows.map(TagModel.fromMap).toList();
+  }
+
+  /// Returns true if a tag with [name] already exists, optionally
+  /// excluding [excludeId] (used when renaming an existing tag).
+  Future<bool> tagNameExists(String name, {int? excludeId}) async {
+    final db = await database;
+    final rows = await db.query(
+      'tags',
+      columns: ['id'],
+      where: excludeId != null
+          ? 'LOWER(name) = LOWER(?) AND id != ?'
+          : 'LOWER(name) = LOWER(?)',
+      whereArgs: excludeId != null ? [name, excludeId] : [name],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
   }
 
   Future<TagModel> insertTag(TagModel tag) async {

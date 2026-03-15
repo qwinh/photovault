@@ -22,15 +22,15 @@ class _TagsViewState extends State<TagsView> {
   final _searchCtrl = TextEditingController();
   String _query = '';
 
-  // Which tag ID is currently being edited inline (-1 = none)
   int? _editingId;
   final _editNameCtrl = TextEditingController();
   final _editDescCtrl = TextEditingController();
+  String? _editNameError;
 
-  // Whether the inline "add" form is visible
   bool _showAddForm = false;
   final _addNameCtrl = TextEditingController();
   final _addDescCtrl = TextEditingController();
+  String? _addNameError;
 
   @override
   void initState() {
@@ -53,28 +53,47 @@ class _TagsViewState extends State<TagsView> {
   void _startEdit(TagModel tag) {
     _editNameCtrl.text = tag.name;
     _editDescCtrl.text = tag.description;
-    setState(() => _editingId = tag.id);
+    setState(() {
+      _editingId = tag.id;
+      _editNameError = null;
+    });
   }
 
   Future<void> _saveEdit(TagModel tag) async {
     final name = _editNameCtrl.text.trim();
-    if (name.isEmpty) return;
-    await context.read<TagProvider>().updateTag(
-          tag.copyWith(
-              name: name, description: _editDescCtrl.text.trim()),
-        );
-    setState(() => _editingId = null);
+    if (name.isEmpty) {
+      setState(() => _editNameError = 'Name cannot be empty.');
+      return;
+    }
+    try {
+      await context.read<TagProvider>().updateTag(
+            tag.copyWith(name: name, description: _editDescCtrl.text.trim()),
+          );
+      setState(() => _editingId = null);
+    } on DuplicateTagNameException {
+      setState(() => _editNameError = 'A tag named "$name" already exists.');
+    }
   }
 
   Future<void> _addTag() async {
     final name = _addNameCtrl.text.trim();
-    if (name.isEmpty) return;
-    await context.read<TagProvider>().addTag(
-          TagModel(name: name, description: _addDescCtrl.text.trim()),
-        );
-    _addNameCtrl.clear();
-    _addDescCtrl.clear();
-    setState(() => _showAddForm = false);
+    if (name.isEmpty) {
+      setState(() => _addNameError = 'Name cannot be empty.');
+      return;
+    }
+    try {
+      await context.read<TagProvider>().addTag(
+            TagModel(name: name, description: _addDescCtrl.text.trim()),
+          );
+      _addNameCtrl.clear();
+      _addDescCtrl.clear();
+      setState(() {
+        _showAddForm = false;
+        _addNameError = null;
+      });
+    } on DuplicateTagNameException {
+      setState(() => _addNameError = 'A tag named "$name" already exists.');
+    }
   }
 
   @override
@@ -109,6 +128,7 @@ class _TagsViewState extends State<TagsView> {
           if (_showAddForm) _AddTagForm(
             nameCtrl: _addNameCtrl,
             descCtrl: _addDescCtrl,
+            nameError: _addNameError,
             onAdd: _addTag,
           ),
 
@@ -127,6 +147,7 @@ class _TagsViewState extends State<TagsView> {
                           ? _EditingTile(
                               nameCtrl: _editNameCtrl,
                               descCtrl: _editDescCtrl,
+                              nameError: _editNameError,
                               onSave: () => _saveEdit(tag),
                               onCancel: () =>
                                   setState(() => _editingId = null),
@@ -217,12 +238,14 @@ class _TagTile extends StatelessWidget {
 class _EditingTile extends StatelessWidget {
   final TextEditingController nameCtrl;
   final TextEditingController descCtrl;
+  final String? nameError;
   final VoidCallback onSave;
   final VoidCallback onCancel;
 
   const _EditingTile({
     required this.nameCtrl,
     required this.descCtrl,
+    this.nameError,
     required this.onSave,
     required this.onCancel,
   });
@@ -235,10 +258,11 @@ class _EditingTile extends StatelessWidget {
         children: [
           TextField(
             controller: nameCtrl,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Tag name',
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
               isDense: true,
+              errorText: nameError,
             ),
           ),
           const SizedBox(height: 6),
@@ -270,11 +294,13 @@ class _EditingTile extends StatelessWidget {
 class _AddTagForm extends StatelessWidget {
   final TextEditingController nameCtrl;
   final TextEditingController descCtrl;
+  final String? nameError;
   final VoidCallback onAdd;
 
   const _AddTagForm({
     required this.nameCtrl,
     required this.descCtrl,
+    this.nameError,
     required this.onAdd,
   });
 
@@ -289,10 +315,11 @@ class _AddTagForm extends StatelessWidget {
           children: [
             TextField(
               controller: nameCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'New tag name *',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
                 isDense: true,
+                errorText: nameError,
               ),
               autofocus: true,
             ),
