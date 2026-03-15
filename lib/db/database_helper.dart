@@ -229,6 +229,19 @@ class DatabaseHelper {
     return rows.map((r) => r['asset_id'] as String).toSet();
   }
 
+  /// Returns all unique asset IDs belonging to any of the given album IDs.
+  /// Returns an empty set if [albumIds] is empty.
+  Future<Set<String>> getAssetIdsForAlbums(Set<int> albumIds) async {
+    if (albumIds.isEmpty) return {};
+    final db = await database;
+    final placeholders = List.filled(albumIds.length, '?').join(', ');
+    final rows = await db.rawQuery(
+      'SELECT DISTINCT asset_id FROM album_images WHERE album_id IN ($placeholders)',
+      albumIds.toList(),
+    );
+    return rows.map((r) => r['asset_id'] as String).toSet();
+  }
+
   // ── Selected Images pool ────────────────────────────────────────────────────
 
   Future<List<String>> getSelectedAssetIds() async {

@@ -9,31 +9,46 @@ import '../db/database_helper.dart';
 enum SortOrder { dateDesc, dateAsc, nameAsc, nameDesc }
 
 class ImageFilterState {
-  final int? albumIdFilter;       // show only images in this album
-  final bool onlyFavoriteAlbums;  // show only images in any favorite album
+  /// Show only images that belong to at least one of these albums.
+  /// Empty = no include filter (all images pass).
+  final Set<int> includeAlbumIds;
+
+  /// Hide images that belong to any of these albums.
+  /// Empty = no exclude filter.
+  final Set<int> excludeAlbumIds;
+
+  /// Show only images in any favorite album.
+  final bool onlyFavoriteAlbums;
+
   final int? minWidth;
   final int? minHeight;
   final SortOrder sortOrder;
 
   const ImageFilterState({
-    this.albumIdFilter,
+    this.includeAlbumIds = const {},
+    this.excludeAlbumIds = const {},
     this.onlyFavoriteAlbums = false,
     this.minWidth,
     this.minHeight,
     this.sortOrder = SortOrder.dateDesc,
   });
 
+  bool get hasAlbumFilter =>
+      includeAlbumIds.isNotEmpty ||
+      excludeAlbumIds.isNotEmpty ||
+      onlyFavoriteAlbums;
+
   ImageFilterState copyWith({
-    Object? albumIdFilter = _sentinel,
+    Set<int>? includeAlbumIds,
+    Set<int>? excludeAlbumIds,
     bool? onlyFavoriteAlbums,
     Object? minWidth = _sentinel,
     Object? minHeight = _sentinel,
     SortOrder? sortOrder,
   }) {
     return ImageFilterState(
-      albumIdFilter: albumIdFilter == _sentinel
-          ? this.albumIdFilter
-          : albumIdFilter as int?,
+      includeAlbumIds: includeAlbumIds ?? this.includeAlbumIds,
+      excludeAlbumIds: excludeAlbumIds ?? this.excludeAlbumIds,
       onlyFavoriteAlbums: onlyFavoriteAlbums ?? this.onlyFavoriteAlbums,
       minWidth: minWidth == _sentinel ? this.minWidth : minWidth as int?,
       minHeight: minHeight == _sentinel ? this.minHeight : minHeight as int?,
@@ -61,8 +76,9 @@ class DeviceImageProvider extends ChangeNotifier {
   bool _permissionGranted = false;
   bool get permissionGranted => _permissionGranted;
 
-  // Asset IDs for album filter and favorite filter (refreshed on demand)
-  Set<String> _albumFilterAssetIds = {};
+  // Asset IDs cached per filter type to avoid redundant DB queries.
+  Set<String> _includeAssetIds = {};
+  Set<String> _excludeAssetIds = {};
   Set<String> _favoriteAssetIds = {};
 
   Future<void> requestPermissionAndLoad() async {
@@ -109,8 +125,8 @@ class DeviceImageProvider extends ChangeNotifier {
     await _applyFilters();
   }
 
-  Future<void> refreshForAlbumFilter(int albumId) async {
-    _albumFilterAssetIds = (await _db.getAssetIdsForAlbum(albumId)).toSet();
+  Future<void> refreshForAlbumFilter(Set<int> albumIds) async {
+    _includeAssetIds = await _db.getAssetIdsForAlbums(albumIds);
     await _applyFilters();
   }
 
@@ -120,47 +136,51 @@ class DeviceImageProvider extends ChangeNotifier {
   }
 
   Future<void> _applyFilters() async {
-    // Refresh DB-backed filter sets when needed
-    if (_filterState.albumIdFilter != null) {
-      _albumFilterAssetIds =
-          (await _db.getAssetIdsForAlbum(_filterState.albumIdFilter!)).toSet();
+    final f = _filterState;
+
+    // Refresh DB-backed sets only when they are actually needed.
+    if (f.includeAlbumIds.isNotEmpty) {
+      _includeAssetIds = await _db.getAssetIdsForAlbums(f.includeAlbumIds);
     }
-    if (_filterState.onlyFavoriteAlbums) {
+    if (f.excludeAlbumIds.isNotEmpty) {
+      _excludeAssetIds = await _db.getAssetIdsForAlbums(f.excludeAlbumIds);
+    }
+    if (f.onlyFavoriteAlbums) {
       _favoriteAssetIds = await _db.getFavoriteAlbumAssetIds();
     }
 
     List<AssetEntity> result = List.of(_all);
 
-    // Filter by album membership
-    if (_filterState.albumIdFilter != null) {
-      result =
-          result.where((a) => _albumFilterAssetIds.contains(a.id)).toList();
+    // Include filter: image must be in at least one included album.
+    if (f.includeAlbumIds.isNotEmpty) {
+      result = result.where((a) => _includeAssetIds.contains(a.id)).toList();
     }
 
-    // Filter by favorite albums
-    if (_filterState.onlyFavoriteAlbums) {
+    // Exclude filter: image must not be in any excluded album.
+    if (f.excludeAlbumIds.isNotEmpty) {
+      result = result.where((a) => !_excludeAssetIds.contains(a.id)).toList();
+    }
+
+    // Favorite-albums filter (independent of include/exclude).
+    if (f.onlyFavoriteAlbums) {
       result = result.where((a) => _favoriteAssetIds.contains(a.id)).toList();
     }
 
-    // Filter by dimensions
-    if (_filterState.minWidth != null) {
-      result =
-          result.where((a) => a.width >= _filterState.minWidth!).toList();
+    // Dimension filters.
+    if (f.minWidth != null) {
+      result = result.where((a) => a.width >= f.minWidth!).toList();
     }
-    if (_filterState.minHeight != null) {
-      result =
-          result.where((a) => a.height >= _filterState.minHeight!).toList();
+    if (f.minHeight != null) {
+      result = result.where((a) => a.height >= f.minHeight!).toList();
     }
 
-    // Sort
-    switch (_filterState.sortOrder) {
+    // Sort.
+    switch (f.sortOrder) {
       case SortOrder.dateDesc:
-        result.sort((a, b) =>
-            (b.createDateTime).compareTo(a.createDateTime));
+        result.sort((a, b) => b.createDateTime.compareTo(a.createDateTime));
         break;
       case SortOrder.dateAsc:
-        result.sort((a, b) =>
-            (a.createDateTime).compareTo(b.createDateTime));
+        result.sort((a, b) => a.createDateTime.compareTo(b.createDateTime));
         break;
       case SortOrder.nameAsc:
         result.sort((a, b) => (a.title ?? '').compareTo(b.title ?? ''));
@@ -174,9 +194,11 @@ class DeviceImageProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Invalidates cached filter sets so next filter apply re-fetches from DB.
+  /// Clears cached DB-backed filter sets so the next [_applyFilters] call
+  /// re-fetches fresh data from the database.
   void invalidateFilterCache() {
-    _albumFilterAssetIds = {};
+    _includeAssetIds = {};
+    _excludeAssetIds = {};
     _favoriteAssetIds = {};
   }
 }
